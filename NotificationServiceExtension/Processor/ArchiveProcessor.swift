@@ -30,16 +30,22 @@ class ArchiveProcessor: NotificationContentProcessor {
             let body = alert?["body"] as? String
             let url = userInfo["url"] as? String
             let group = userInfo["group"] as? String
-            
+            let image = userInfo["image"] as? String
+            let id = userInfo["id"] as? String
+
             try? realm?.write {
                 let message = Message()
+                if let id, !id.isEmpty {
+                    message.id = id
+                }
                 message.title = title
                 message.subtitle = subtitle
                 message.body = body
                 message.url = url
+                message.image = image
                 message.group = group
                 message.createDate = Date()
-                realm?.add(message)
+                realm?.add(message, update: .all)
             }
         }
         return bestAttemptContent

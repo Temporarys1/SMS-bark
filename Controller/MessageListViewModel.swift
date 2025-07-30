@@ -34,12 +34,16 @@ class MessageListViewModel: ViewModel, ViewModelType {
         var loadMore: Driver<Void>
         /// 删除
         var itemDelete: Driver<MessageListCellItem>
+        /// 删除群组中某一条消息
+        var itemDeleteInGroup: Driver<MessageItemModel>
         /// 批量删除
-        var delete: Driver<MessageDeleteType>
+        var delete: Driver<MessageDeleteTimeRange>
         /// 切换群组和列表显示样式
         var groupToggleTap: Driver<Void>
         /// 搜索
         var searchText: Observable<String?>
+        /// 重新刷新已加载的页的数据 （最多10页，超过则不刷新）
+        var reload: Driver<Void>
     }
     
     struct Output {
@@ -126,7 +130,7 @@ class MessageListViewModel: ViewModel, ViewModelType {
     }
 
     /// 获取 message 列表下一页数据
-    private func getListNextPage() -> [MessageListCellItem] {
+    private func getListNextPage(page: Int, pageCount: Int) -> [MessageListCellItem] {
         guard let result = results else {
             return []
         }
@@ -142,12 +146,11 @@ class MessageListViewModel: ViewModel, ViewModelType {
             // copy 是因为 message 可能在被删除后，还会被访问导致闪退
             messages.append(.message(model: MessageItemModel(message: result[i])))
         }
-        page += 1
         return messages
     }
 
     /// 获取 group 列表下一页数据
-    private func getGroupNextPage() -> [MessageListCellItem] {
+    private func getGroupNextPage(page: Int, pageCount: Int) -> [MessageListCellItem] {
         guard let groups, let results else {
             return []
         }
@@ -162,12 +165,7 @@ class MessageListViewModel: ViewModel, ViewModelType {
         
         for i in startIndex..<endIndex {
             let group = groups[i].group
-            let messageResult: Results<Message>
-            if let group {
-                messageResult = results.filter("group == %@", group)
-            } else {
-                messageResult = results.filter("group == nil")
-            }
+            let messageResult = getMessages(in: results, group: group)
                 
             var messages: [MessageItemModel] = []
             for i in 0..<min(messageResult.count, 5) {
@@ -181,20 +179,35 @@ class MessageListViewModel: ViewModel, ViewModelType {
                 items.append(.messageGroup(name: group ?? NSLocalizedString("default"), totalCount: messageResult.count, messages: messages))
             }
         }
-        page += 1
         return items
     }
+
+    /// 使用 groupName 获取 messages
+    func getMessages(in results: Results<Message>, group: String?) -> Results<Message> {
+        if let group {
+            return results.filter("group == %@", group)
+        } else {
+            return results.filter("group == nil")
+        }
+    }
     
-    private func getNextPage() -> [MessageListCellItem] {
+    private func getPage(page: Int, pageCount: Int) -> [MessageListCellItem] {
         if case .group = self.sourceType {
             // 查看指定分组时，只能按列表查看
-            return getListNextPage()
+            return getListNextPage(page: page, pageCount: pageCount)
         }
         if type == .list || !searchText.isEmpty {
             // 搜索时，也必须按列表查看
-            return getListNextPage()
+            return getListNextPage(page: page, pageCount: pageCount)
         }
-        return getGroupNextPage()
+        return getGroupNextPage(page: page, pageCount: pageCount)
+    }
+    
+    private func getNextPage() -> [MessageListCellItem] {
+        defer {
+            page += 1
+        }
+        return getPage(page: self.page, pageCount: self.pageCount)
     }
     
     func transform(input: Input) -> Output {
@@ -247,7 +260,6 @@ class MessageListViewModel: ViewModel, ViewModelType {
         Observable
             .merge(
                 input.refresh.asObservable().map { () },
-                filterGroups.map { _ in () },
                 input.searchText.asObservable().map { _ in () },
                 messageTypeChanged.asObservable().map { _ in () }
             )
@@ -278,6 +290,16 @@ class MessageListViewModel: ViewModel, ViewModelType {
                     messagesRelay.accept([MessageSection(header: "model", messages: items)])
                 }
             }).disposed(by: rx.disposeBag)
+        
+        // 重新加载已加载的页的数据，最多10页
+        input.reload.drive(onNext: { [weak self] _ in
+            guard let self, self.page > 0, self.page <= 10 else { return }
+            // 刷新已加载的页的数据
+            let messages = self.getPage(page: 0, pageCount: self.page * self.pageCount)
+            messagesRelay.accept(
+                [MessageSection(header: "model", messages: messages)]
+            )
+        }).disposed(by: rx.disposeBag)
         
         // 删除message
         input.itemDelete.drive(onNext: { [weak self] item in
@@ -334,24 +356,53 @@ class MessageListViewModel: ViewModel, ViewModelType {
             
         }).disposed(by: rx.disposeBag)
         
-        // 批量删除
-        input.delete.drive(onNext: { [weak self] type in
-            guard let strongSelf = self else { return }
+        // 删除群组中某一条消息
+        input.itemDeleteInGroup.drive(onNext: { [weak self] model in
+            guard let self, let results else { return }
             
-            var date = Date()
-            switch type {
-            case .allTime:
-                date = Date(timeIntervalSince1970: 0)
-            case .todayAndYesterday:
-                date = Date.yesterday
-            case .today:
-                date = Date().noon
-            case .lastHour:
-                date = Date.lastHour
+            guard var section = messagesRelay.value.first else {
+                return
             }
             
+            // 删除数据库里的 message
+            if let realm = try? Realm(),
+               let message = realm.objects(Message.self).filter("id == %@", model.id).first
+            {
+                try? realm.write {
+                    realm.delete(message)
+                }
+            }
+            
+            if let index = section.messages.firstIndex(where: { item in
+                if case .messageGroup(_, _, let messages) = item {
+                    return messages.contains { item in
+                        return item.id == model.id
+                    }
+                }
+                return false
+            }) {
+                // 用最新的数据，重新生成 cellItem
+                if case .messageGroup(let name, _, var messages) = section.messages[index] {
+                    let messagesResult = self.getMessages(in: results, group: messages.first?.group)
+                    messages = messagesResult.prefix(5).map { MessageItemModel(message: $0) }
+                    if messages.count == 0 {
+                        section.messages.remove(at: index)
+                    } else {
+                        section.messages[index] = .messageGroup(name: name, totalCount: messagesResult.count, messages: messages)
+                    }
+                }
+            }
+            
+            messagesRelay.accept([section])
+            
+        }).disposed(by: rx.disposeBag)
+        
+        // 批量删除
+        input.delete.drive(onNext: { [weak self] range in
+            guard let self else { return }
+            
             if let realm = try? Realm() {
-                guard let messages = strongSelf.getResults(filterGroups: filterGroups.value, searchText: nil)?.filter("createDate >= %@", date) else {
+                guard let messages = self.getResults(filterGroups: filterGroups.value, searchText: nil)?.filter("createDate >= %@ and createDate <= %@ ", range.startDate, range.endDate) else {
                     return
                 }
                 
@@ -360,8 +411,8 @@ class MessageListViewModel: ViewModel, ViewModelType {
                 }
             }
             
-            strongSelf.page = 0
-            messagesRelay.accept([MessageSection(header: "model", messages: strongSelf.getNextPage())])
+            self.page = 0
+            messagesRelay.accept([MessageSection(header: "model", messages: self.getNextPage())])
             
         }).disposed(by: rx.disposeBag)
         

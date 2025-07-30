@@ -4,6 +4,11 @@ Bark is a push notification tool app. It's free, simple, and secure, leveraging 
 Bark supports many advanced features of iOS notifications, including notification grouping, custom push icons, sounds, time-sensitive notifications, critical alerts, and more.<br/> 
 Additionally, Bark supports self-hosted servers and offers encrypted push notifications to ensure privacy and security. <br/>
 
+## Download
+<a target='_blank' href='https://apps.apple.com/app/bark-custom-notifications/id1403753865'>
+<img src='http://ww2.sinaimg.cn/large/0060lm7Tgw1f1hgrs1ebwj308102q0sp.jpg' width='144' height='49' />
+</a>
+
 ## Documentation
 [https://bark.day.app/#/en-us/](https://bark.day.app/#/en-us/)
 
@@ -22,7 +27,7 @@ You can send GET or POST requests, and you'll receive a push notification immedi
 URL structure: The first part is the key, followed by three matches
 /:key/:body 
 /:key/:title/:body 
-/:key/: title/:subtitle/:body 
+/:key/:title/:subtitle/:body 
 
 title: The push title, slightly larger than the body text 
 subtitle: The push subtitle
@@ -81,6 +86,7 @@ Critical alerts will ignore silent and do not disturb modes, always playing the 
 ```
 
 ## Others
+- [Browser Extension](https://github.com/ij369/bark-sender)
 - [Online Scheduled Sending](https://api.ihint.me/bark.html)
 - [Windows Push Client](https://github.com/HsuDan/BarkHelper)
 - [Cross-platform Command Line Application](https://github.com/JasonkayZK/bark-cli)
@@ -88,6 +94,7 @@ Critical alerts will ignore silent and do not disturb modes, always playing the 
 - [Quicker Actions](https://getquicker.net/Sharedaction?code=e927d844-d212-4428-758d-08d69de12a3b)
 - [Bark for Wox](https://github.com/Zeroto521/Wox.Plugin.Bark)
 - [bark-jssdk](https://github.com/afeiship/bark-jssdk)
+- [bark.js](https://github.com/skyhancloud/bark.js)
 - [java-bark-server](https://gitee.com/hotlcc/java-bark-server)
 - [bark-java-sdk](https://github.com/MoshiCoCo/bark-java-sdk)
 - [Python for Bark](https://github.com/funny-cat-happy/barknotificator)

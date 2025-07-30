@@ -1,5 +1,5 @@
 //
-//  MessageTableViewCellViewModel.swift
+//  MessageSection.swift
 //  Bark
 //
 //  Created by huangfeng on 2020/11/21.
@@ -17,6 +17,7 @@ enum MessageListCellItem: Equatable {
     /// 一组消息，可以收缩折叠
     case messageGroup(name: String, totalCount: Int, messages: [MessageItemModel])
     
+    // 确定 cell 内部是否需要更新
     static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
         case (.message(let l), .message(let r)):
@@ -46,12 +47,13 @@ enum MessageListCellItem: Equatable {
 extension MessageListCellItem: IdentifiableType {
     typealias Identity = String
     
+    // 确定整个 cell 是否删除或替换
     var identity: String {
         switch self {
         case .message(let model):
-            return "list_\(model.id)"
+            return "list_\(model.id)_\(model.createDate?.timeInterval ?? 0)"
         case .messageGroup(_, _, let messages):
-            return "group_\(messages.first?.id ?? "")"
+            return "group_\(messages.first?.group ?? NSLocalizedString("Default"))_\(messages.first?.createDate?.timeInterval ?? 0)"
         }
     }
 }

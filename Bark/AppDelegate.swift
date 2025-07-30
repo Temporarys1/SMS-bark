@@ -6,9 +6,9 @@
 //  Copyright © 2018年 Fin. All rights reserved.
 //
 
-import CrashReporter
 import IQKeyboardManagerSwift
 import IQKeyboardToolbarManager
+import SVProgressHUD
 import SwiftyStoreKit
 import UIKit
 import UserNotifications
@@ -20,63 +20,22 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     func setupRealm() {
         // Tell Realm to use this new configuration object for the default Realm
         Realm.Configuration.defaultConfiguration = kRealmDefaultConfiguration
-
-//        // iCloud 同步
-//        syncEngine = SyncEngine(objects: [
-//            SyncObject(type: Message.self)
-//        ], databaseScope: .private)
-
+        
         #if DEBUG
-            let realm = try? Realm()
-            print("message count: \(realm?.objects(Message.self).count ?? 0)")
+        let realm = try? Realm()
+        print("message count: \(realm?.objects(Message.self).count ?? 0)")
         #endif
     }
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         self.window = UIWindow(frame: UIScreen.main.bounds)
         self.window?.backgroundColor = UIColor.black
-        
-        #if !DEBUG
-            let config = PLCrashReporterConfig(signalHandlerType: .mach, symbolicationStrategy: [])
-            if let crashReporter = PLCrashReporter(configuration: config) {
-                // Enable the Crash Reporter.
-                do {
-                    try crashReporter.enableAndReturnError()
-                } catch {
-                    print("Warning: Could not enable crash reporter: \(error)")
-                }
 
-                if crashReporter.hasPendingCrashReport() {
-                    let reportController = CrashReportViewController()
-                    do {
-                        let data = try crashReporter.loadPendingCrashReportDataAndReturnError()
-
-                        // Retrieving crash reporter data.
-                        let report = try PLCrashReport(data: data)
-
-                        if let text = PLCrashReportTextFormatter.stringValue(for: report, with: PLCrashReportTextFormatiOS) {
-                            reportController.crashLog = text
-                        } else {
-                            print("CrashReporter: can't convert report to text")
-                        }
-                    } catch {
-                        print("CrashReporter failed to load and parse with error: \(error)")
-                    }
-
-                    // Purge the report.
-                    crashReporter.purgePendingCrashReport()
-                    self.window?.rootViewController = reportController
-                    self.window?.makeKeyAndVisible()
-                    return true
-                }
-            } else {
-                print("Could not create an instance of PLCrashReporter")
-            }
-        #endif
-        
         // 必须在应用一开始就配置，否则应用可能提前在配置之前试用了 Realm() ，则会创建两个独立数据库。
         setupRealm()
-
+        
+        SVProgressHUD.setMinimumDismissTimeInterval(1.5)
+        
         IQKeyboardManager.shared.isEnabled = true
         IQKeyboardToolbarManager.shared.isEnabled = true
         if #available(iOS 14, *), UIDevice.current.userInterfaceIdiom == .pad {
@@ -142,81 +101,42 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         }
         notificatonHandler(userInfo: response.notification.request.content.userInfo)
     }
-
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        if UIApplication.shared.applicationState == .active {
-            stopCallNotificationProcessor()
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        guard let delete = userInfo["delete"] as? String, delete == "1", let id = userInfo["id"] as? String else {
+            completionHandler(.noData)
+            return
         }
+        
+        // 删除通知中心推送
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
+
+        // 删除历史记录
+        if let realm = try? Realm(),
+           let message = realm.objects(Message.self).filter("id == %@", id).first
+        {
+            try? realm.write {
+                realm.delete(message)
+            }
+        }
+
+        completionHandler(.newData)
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         return .alert
     }
     
     private func notificatonHandler(userInfo: [AnyHashable: Any]) {
-        let viewController = Client.shared.currentSnackbarController
-        func presentController() {
-            let alert = (userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any]
-            let title = alert?["title"] as? String
-            let body = alert?["body"] as? String
-            let url: URL? = {
-                if let url = userInfo["url"] as? String {
-                    return URL(string: url)
-                }
-                return nil
-            }()
-
-            // URL 直接打开
-            if let url = url {
-                Client.shared.openUrl(url: url)
-                return
-            }
-
-            let alertController = UIAlertController(title: title, message: body, preferredStyle: .alert)
-            alertController.addAction(UIAlertAction(title: NSLocalizedString("CopyContent"), style: .default, handler: { _ in
-                if let copy = userInfo["copy"] as? String {
-                    UIPasteboard.general.string = copy
-                } else {
-                    UIPasteboard.general.string = body
-                }
-            }))
-            alertController.addAction(UIAlertAction(title: NSLocalizedString("MoreActions"), style: .default, handler: { _ in
-                var shareContent = ""
-                if let title = title {
-                    shareContent += "\(title)\n"
-                }
-                if let body = body {
-                    shareContent += "\(body)\n"
-                }
-                for (key, value) in userInfo {
-                    if ["aps", "title", "body", "url"].contains((key as? String) ?? "") {
-                        continue
-                    }
-                    shareContent += "\(key): \(value) \n"
-                }
-                var items: [Any] = []
-                items.append(shareContent)
-                if let url = url {
-                    items.append(url)
-                }
-                let controller = Client.shared.window?.rootViewController
-                let activityController = UIActivityViewController(activityItems: items,
-                                                                  applicationActivities: nil)
-                if let popover = activityController.popoverPresentationController {
-                    popover.sourceView = controller?.view
-                    popover.sourceRect = CGRect(x: controller?.view.bounds.midX ?? 0, y: controller?.view.bounds.midY ?? 0, width: 0, height: 0)
-                }
-                controller?.present(activityController, animated: true, completion: nil)
-            }))
-            alertController.addAction(UIAlertAction(title: NSLocalizedString("Cancel"), style: .cancel, handler: nil))
-
-            viewController?.present(alertController, animated: true, completion: nil)
+        if let action = userInfo["action"] as? String, action == "none" {
+            return
         }
-
-        if let presentedController = viewController?.presentedViewController {
-            presentedController.dismiss(animated: false) {
-                presentController()
-            }
-        } else {
-            presentController()
+        
+        // URL 直接打开
+        if let url = try? (userInfo["url"] as? String)?.asURL() {
+            Client.shared.openUrl(url: url)
+            return
         }
+                
+        alertNotification(userInfo: userInfo)
     }
 
     func applicationWillResignActive(_ application: UIApplication) {
@@ -233,11 +153,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // 设置 -1 可以清除应用角标，但不清除通知中心的推送
         // 设置 0 会将通知中心的所有推送一起清空掉
         UIApplication.shared.applicationIconBadgeNumber = -1
-    }
-
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        // 如果有响铃通知，则关闭响铃
-        stopCallNotificationProcessor()
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
@@ -262,9 +177,65 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         }
         return false
     }
-    
-    /// 停止响铃
-    func stopCallNotificationProcessor() {
-        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(kStopCallProcessorKey as CFString), nil, nil, true)
+}
+
+extension AppDelegate {
+    func alertNotification(userInfo: [AnyHashable: Any]) {
+        let alert = (userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any]
+        let title = alert?["title"] as? String
+        let subtitle = alert?["subtitle"] as? String
+        let body = alert?["body"] as? String
+        let url = try? (userInfo["url"] as? String)?.asURL()
+
+        let alertController = UIAlertController(title: title, message: body, preferredStyle: .alert)
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("CopyContent"), style: .default, handler: { _ in
+            if let copy = userInfo["copy"] as? String {
+                UIPasteboard.general.string = copy
+            } else {
+                UIPasteboard.general.string = body
+            }
+        }))
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("MoreActions"), style: .default, handler: { _ in
+            var shareContent = ""
+            if let title = title {
+                shareContent += "\(title)\n"
+            }
+            if let subtitle = subtitle {
+                shareContent += "\(subtitle)\n"
+            }
+            if let body = body {
+                shareContent += "\(body)\n"
+            }
+            for (key, value) in userInfo {
+                if ["aps", "title", "subtitle", "body", "url"].contains((key as? String) ?? "") {
+                    continue
+                }
+                shareContent += "\(key): \(value) \n"
+            }
+            var items: [Any] = []
+            items.append(shareContent)
+            if let url = url {
+                items.append(url)
+            }
+            let controller = Client.shared.window?.rootViewController
+            let activityController = UIActivityViewController(activityItems: items,
+                                                              applicationActivities: nil)
+            if let popover = activityController.popoverPresentationController {
+                popover.sourceView = controller?.view
+                popover.sourceRect = CGRect(x: controller?.view.bounds.midX ?? 0, y: controller?.view.bounds.midY ?? 0, width: 0, height: 0)
+            }
+            controller?.present(activityController, animated: true, completion: nil)
+        }))
+        alertController.addAction(UIAlertAction(title: NSLocalizedString("Cancel"), style: .cancel, handler: nil))
+
+        let viewController = Client.shared.currentSnackbarController
+        
+        if let presentedController = viewController?.presentedViewController {
+            presentedController.dismiss(animated: false) {
+                viewController?.present(alertController, animated: true, completion: nil)
+            }
+        } else {
+            viewController?.present(alertController, animated: true, completion: nil)
+        }
     }
 }
