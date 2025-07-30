@@ -1,56 +1,45 @@
-# 工作流名称
-name: Sync Fork
+name: Upstream Sync
 
-# 触发工作流的事件
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: "0 */6 * * *" # run every 6 hours
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
-  sync:
+  sync_latest_from_upstream:
+    name: Sync latest commits from upstream repo
     runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }}
+
     steps:
-      # 步骤1：检出你的 Fork 仓库代码
-      - name: Checkout Fork
+      # Step 1: run a standard checkout action
+      - name: Checkout target repo
         uses: actions/checkout@v4
+
+      # Step 2: run the sync action
+      - name: Sync upstream changes
+        id: sync
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.1
         with:
-          fetch-depth: 0
+          upstream_sync_repo: Finb/Bark
+          upstream_sync_branch: master
+          target_sync_branch: master
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 步骤2：同步上游仓库的更新
-      - name: Sync Upstream
+      - name: Sync check
+        if: failure()
         run: |
-          # -----------------------------------------------------------------
-          # 注意：请根据你的实际情况修改下面的 'main' 分支为你的默认分支名
-          # 常见的有 'main', 'master' 等
-          BRANCH_NAME="master"
-          # -----------------------------------------------------------------
+          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork."
+          exit 1
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # [修正后的命令]
-          # 先通过 --json parent 获取整个 parent 对象
-          # 再通过 --jq .parent.url 从中提取 url
-          UPSTREAM_URL=$(gh repo view --json parent --jq .parent.url)
-          
-          if [ -z "$UPSTREAM_URL" ] || [ "$UPSTREAM_URL" == "null" ]; then
-            echo "This repository is not a fork. Skipping sync."
-            exit 0
-          fi
-
-          echo "Upstream URL is $UPSTREAM_URL"
-          
-          git remote add upstream $UPSTREAM_URL
-          git fetch upstream
-
-          git checkout $BRANCH_NAME
-          
-          # 使用 --ff-only 进行快进合并，这是一个安全的操作
-          git merge --ff-only "upstream/$BRANCH_NAME"
-
-          # git push 会使用由 actions/checkout 配置好的凭据
-          git push origin $BRANCH_NAME
-        env:
-          # gh CLI 命令需要 GITHUB_TOKEN 来进行认证
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 2
